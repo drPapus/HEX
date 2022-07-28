@@ -1,49 +1,34 @@
 import * as THREE from 'three'
 import { 
         ACESFilmicToneMapping,
-        BoxGeometry,
-        Color,
         FloatType,
-        GridHelper,
         MeshStandardMaterial,
         PMREMGenerator,
         Raycaster,
         sRGBEncoding,
-        Vector2,
         MathUtils,
+        BufferGeometry,
+        PointsMaterial,
+        Points
  } from 'three';
 import { GUI } from 'dat.gui'
 import Stats from 'three/examples/jsm/libs/stats.module'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader'
+import { newPrismFaces} from './World/components/_faces'
+import { worldSize } from './World/components/_config';
+import {cellSize} from "./World/components/_config";
+import { gridHelper, axesHelper } from './World/components/_helpers';
+
+
+import  scene  from './World/components/_scene';
+import camera from './World/components/_camera';
+
 
 import SimplexNoise = require('simplex-noise');
 
-
-// SCENE
-const scene = new THREE.Scene();
-
-//Helpers
-const gridHelper = new GridHelper( 400, 40, 0x0000ff, 0x808080 );
-gridHelper.position.y = 0;
-gridHelper.position.x = 0;
 scene.add( gridHelper );
-
-scene.background = new Color("#FFEECC");
-
-// CAMERA
-const camera = new THREE.PerspectiveCamera(
-    45,
-    window.innerWidth / window.innerHeight,
-    0.1,
-    1000
-)
-camera.position.set(80, 30, 15)
-
-//GUI
 const gui = new GUI()
-
-//Statistics
 const stats = Stats()
 document.body.appendChild(stats.dom)
 
@@ -54,7 +39,6 @@ export function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
   }
   window.addEventListener('resize', onWindowResize);
-
 
 // RENDERER
 const renderer = new THREE.WebGLRenderer({antialias: true})
@@ -68,7 +52,6 @@ document.body.appendChild(renderer.domElement)
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = true
 
-
 const light = new THREE.SpotLight()
 light.position.set(12.5, 12.5, 12.5)
 light.castShadow = true
@@ -76,12 +59,18 @@ light.shadow.mapSize.width = 1024
 light.shadow.mapSize.height = 1024
 scene.add(light)
 
-
-let hexagonGeometries = new BoxGeometry(0,0,0);
-
+// CONFIG =============================================================================================
 let envmap;
-const cellSize = 16;
 
+interface VoxelWorld {
+    cellSize:number
+    worldSize:number
+    cellSliceSize:number
+    cell:any
+    cellSizeWidth:number
+    cellSizeHeight:number
+    cellSizeDepth:number
+}
 
 //////////////////////////////
 interface VoxelWorld{
@@ -90,33 +79,37 @@ interface VoxelWorld{
   cell:any
 }
 
-
 class VoxelWorld {
-  static faces: any;
+  static faces: any = newPrismFaces;
 
-  constructor(cellSize: any) {
+  constructor(cellSize: any, worldSize: any) {
+    this.worldSize = worldSize;
     this.cellSize = cellSize;
     this.cellSliceSize = cellSize * cellSize;
-    this.cell = new Uint8Array(cellSize * cellSize * cellSize);
-  }
 
+    this.cellSizeWidth = cellSize * Math.sqrt(3);
+    this.cellSizeHeight = cellSize * 2;
+    this.cellSizeDepth = cellSize;
+
+    this.cell = new Uint8Array(worldSize * worldSize * worldSize);
+}
  //вычислить смещение вокселя
   computeVoxelOffset(x:number, y:number, z:number) {
     const {cellSize, cellSliceSize} = this;
-    
-    const voxelX = MathUtils.euclideanModulo(x, cellSize) | 0;
-    const voxelY = MathUtils.euclideanModulo(y, cellSize) | 0;
-    const voxelZ = MathUtils.euclideanModulo(z, cellSize) | 0;
-    return voxelY * cellSliceSize + voxelZ * cellSize + voxelX;
-
+    const voxelX = MathUtils.euclideanModulo(x, worldSize) | 0;
+    const voxelY = MathUtils.euclideanModulo(y, worldSize) | 0;
+    const voxelZ = MathUtils.euclideanModulo(z, worldSize) | 0;
+    let offset = voxelY * worldSize * worldSize
+    + voxelZ * worldSize
+    + voxelX;
+return offset
   }
-  
 //получить ячейку для вокселя
   getCellForVoxel(x:number, y:number, z:number) {
     const {cellSize} = this;
-    const cellX = Math.floor(x / cellSize);
-    const cellY = Math.floor(y / cellSize);
-    const cellZ = Math.floor(z / cellSize);
+    const cellX = Math.floor(x / worldSize);
+    const cellY = Math.floor(y / worldSize);
+    const cellZ = Math.floor(z / worldSize);
     if (cellX !== 0 || cellY !== 0 || cellZ !== 0) {
       return null;
     }
@@ -132,11 +125,10 @@ class VoxelWorld {
     }
     const voxelOffset = this.computeVoxelOffset(x, y, z);
     cell[voxelOffset] = v;
- 
   }
 //получить воксель
   getVoxel(x:number, y:number, z:number) {
-    const cell = this.getCellForVoxel(x , y, z);
+    const cell = this.getCellForVoxel(x, y, z);
     if (!cell) {
       return 0;
     }
@@ -144,198 +136,71 @@ class VoxelWorld {
     return cell[voxelOffset];
   }
 
-
   //генерировать данные геометрии для ячейки
 
   generateGeometryDataForCell(cellX:any, cellY:any, cellZ:any) {
-    const {cellSize} = this;
+    const {cellSizeWidth, cellSizeHeight, cellSizeDepth, worldSize} = this;
     const positions:any[] = [];
     const normals:number[] = [];
     const indices:number[] = [];
-    const startX:number = cellX * cellSize;
-    const startY:number = cellY * cellSize;
-    const startZ:number = cellZ * cellSize;
+    const startX:number = cellX * worldSize;
+    const startY:number = cellY * worldSize;
+    const startZ:number = cellZ * worldSize;
 
-    
-    for (let y = 0; y < cellSize; ++y) {
-      const voxelY = startY + y;
-      for (let z = 0; z < cellSize; ++z) {
-        const voxelZ = startZ + z;
-        for (let x = 0; x < cellSize; ++x) {
-          const voxelX = startX + x;
-          const voxel = this.getVoxel(voxelX, voxelY, voxelZ);
-          if (voxel) {
-            // Тут вокселю нужно знать где стороны/фэйсы
-            for (const {dir, corners} of VoxelWorld.faces) {
-              const neighbor = this.getVoxel(
-                  voxelX + dir[0],
-                  voxelY + dir[1],
-                  voxelZ + dir[2]
-                  );
-              if (!neighbor) {
-                // у этого вокселя нет соседей в этом направлении, поэтому рисуем грань.
-                const ndx = positions.length / 3;
-                for (const pos of corners) {
-                  positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
-                  normals.push(...dir);
+    for (let y = 0; y < worldSize; ++y) {
+        const voxelY = startY + y;
+        for (let z = 0; z < worldSize; ++z) {
+            const voxelZ = startZ + z;
+            for (let x = 0; x < worldSize; ++x) {
+                const voxelX = startX + x;
+                const voxel = this.getVoxel(voxelX, voxelY, voxelZ);
+                if (!voxel) {continue;}
+
+                // Тут вокселю нужно знать где стороны/фэйсы
+                for (const {side, dir, corners} of VoxelWorld.faces) {
+                    let dirX = dir[0];
+                    let dirY = dir[1];
+                    let dirZ = dir[2];
+
+                    if ('bcfe'.includes(side)) {dirX += z % 2}
+
+                    const neighbor = this.getVoxel(
+                        voxelX + dirX,
+                        voxelY + dirY,
+                        voxelZ + dirZ,
+                    );
+
+                    // Есть сосед - не рисуем грань
+                    if (neighbor) {continue;}
+
+                    // у этого вокселя нет соседей в этом направлении, поэтому рисуем грань.
+                    const ndx = positions.length / 3;
+                    for (const pos of corners) {
+                        positions.push(
+                            pos[0] + x * cellSizeWidth + (z % 2 * (cellSizeWidth / 2)),
+                            pos[1] + y * cellSizeDepth,
+                            pos[2] + z * cellSizeHeight - (z * .5)
+                        );
+                        normals.push(...dir);
+
+                    }
+                    indices.push(
+                        ndx, ndx + 1, ndx + 2,
+                        ndx + 2, ndx + 1, ndx + 3,
+                    );   
                 }
-                indices.push(
-                  ndx, ndx + 1, ndx + 2,
-                  ndx + 2, ndx + 1, ndx + 3,
-                );
-              }
             }
-          }
         }
-      }
     }
 
     return {
-      positions,
-      normals,
-      indices,
+        positions,
+        normals,
+        indices,
+
     };
-  }
 }
-
-
- // Hexagonal Prism
-
-      /*
-            2 -- 3
-           /      \
-          1        4                 -z
-           \      /                   |
-            0 -- 5               -x ---- +x
-                                      |
-               C                     +z
-             2 -- 3
-          B /      \ D
-           1        4
-          A \      / E
-             0 -- 5
-               F
-      */
-
-let t = 0.5 * Math.sqrt(3);
-
-VoxelWorld.faces = [
-
-  { // BOTTOM
-   dir: [-1, -1, 0 ],
-   corners: [
-   [ 0.5, -1,  t],  
-   [-0.5, -1,  t], 
-   [ 0.5, -1, -t],  
-   [-0.5, -1, -t],
-   ],
- },
- {
- dir: [ 0, 0, 0 ],
-   corners: [
-   [0.5, -1,  0], 
-   [0.5, -1, -t], 
-   [0.5, -1,  t],  
-   [1.0, -1,  0],   
-   ],
- },
- {
-   dir: [ 0, 0, 0 ],
-   corners: [
-   [-0.5, -1, 0], 
-   [-0.5, -1, t], 
-   [-0.5, -1,-t],  
-   [-1.0, -1, 0],   
-   ],
- },
- { // TOP
-   dir: [ 1, 1, 0 ],
-   corners: [
-   [-0.5, 1,  t],  
-   [ 0.5, 1,  t], 
-   [-0.5, 1, -t],  
-   [ 0.5, 1, -t],
-   ],
- },
- {
-   dir: [ 0, 1, 1 ],
-   corners: [
-   [-0.5, 1,  0], 
-   [-0.5, 1, -t], 
-   [-0.5, 1,  t],  
-   [-1.0, 1,  0],   
-   ],
- },
- {
-   dir: [ 0, 1, 0 ],
-   corners: [
-   [0.5, 1, 0], 
-   [0.5, 1, t], 
-   [0.5, 1,-t],  
-   [1.0, 1, 0],   
-   ],
- },
- 
-   { // A
-     dir: [ 1, 0, 0, ],
-     corners: [
-     [-0.5,  1,  t],  // 6   0
-     [-1.0,  1,  0],  // 7   1 
-     [-0.5, -1,  t],  // 8   0B
-     [-1.0, -1,  0],  // 9   1B
-     ],
-   },
- 
-   { // B
-     dir: [  1, 0, 0 ],
-     corners: [
-     [-1.0,  1,  0],  // 10  1
-     [-0.5,  1, -t],  // 11  2
-     [-1.0, -1,  0],  // 12  1B
-     [-0.5, -1, -t],  // 13  2B
-     ],
-   },
-   { // C
-     dir: [ 0, -1, -1 ],
-     corners: [
-     [-0.5,  1, -t],  // 14  2
-     [ 0.5,  1, -t],  // 15  3
-     [-0.5, -1, -t],  // 16  2B
-     [ 0.5, -1, -t],  // 17  3B
-     ],
-   },
-   { //  D
-     dir: [ 0, 1, 1 ],
-     corners: [
-     [0.5,  1, -t],  // 18  3
-     [1.0,  1,  0],  // 19  4
-     [0.5, -1, -t],  // 20  3B        
-     [1.0, -1,  0],  // 21  4B
-     ],
-   },
-   { // E
-     dir:[ 0, 0, -1 ],
-     corners: [
-      [1.0, 1,  0],  // 22  4
-      [0.5, 1,  t],  // 23  5
-      [1.0, -1, 0],  // 24  4B
-      [0.5, -1, t],  // 25  5B
-     ]
-   },
-   { //F
-     dir: [ 0, 0, 1 ],
-     corners: [
-     [ 0.5,  1,  t],  // 26  5
-     [-0.5,  1,  t],  // 27  0
-     [ 0.5, -1,  t],  // 28  5B
-     [-0.5, -1,  t],  // 29  0B
-     ],
-   },
- ];
-
-
-
-//////////////////////////////
+}
 
 
 (async function(){
@@ -347,15 +212,17 @@ VoxelWorld.faces = [
     const simplex = new SimplexNoise 
 
 /////
-const world = new VoxelWorld(cellSize);
+const world = new VoxelWorld(cellSize, worldSize);
 
-  for (let y = 0; y < cellSize; ++y) {
-    for (let z = 0; z < cellSize; ++z) {
-      for (let x = 0; x < cellSize; ++x) {
-        const height = (Math.sin(x / cellSize * Math.PI * 2) + Math.sin(z / cellSize * Math.PI * 3)) * (cellSize / 6) + (cellSize / 2);
+  for (let y = 0; y < worldSize; ++y) {
+    for (let z = 0; z < worldSize; ++z) {
+      for (let x = 0; x < worldSize; ++x) {
+        const height =
+        (Math.sin(x / worldSize * Math.PI * 2) + Math.sin(z / worldSize * Math.PI * 3))
+        * (worldSize / 6)
+        + (worldSize / 2);
         if (y < height) {
-          world.setVoxel(x * 2, y, z * 2, 1); //x&z * 2
-          // mesh.position.set((x + (z % 2) * 0.5) * 2, y, z * 1.535);
+          world.setVoxel(x, y, z, 1);
         }
       }
     }
@@ -364,12 +231,7 @@ const world = new VoxelWorld(cellSize);
   const {positions, normals, indices} = world.generateGeometryDataForCell(0, 0, 0);
   const geometry = new THREE.BufferGeometry();
 
-  const material = new MeshStandardMaterial({
-                 envMap: envmap,
-                 flatShading: true
-                
-             })
-
+  const material = new MeshStandardMaterial({envMap: envmap,flatShading: true})
 
   const positionNumComponents = 3;
   const normalNumComponents = 3;
@@ -383,11 +245,15 @@ const world = new VoxelWorld(cellSize);
   const mesh = new THREE.Mesh(geometry, material);
   scene.add(mesh);
 
-//LINE
-const edges = new THREE.EdgesGeometry( geometry );
+
+const edges = new THREE.EdgesGeometry( geometry, 90 );
 const line = new THREE.LineSegments( edges, new THREE.LineBasicMaterial( { color: 0xff0000 } ) );
 scene.add( line );
 
+
+
+
+///////////////////////////////////////////////////////////////////////////////////
 
     renderer.setAnimationLoop(()=>{
         //hexagonMesh.rotation.x += 0.01
@@ -395,6 +261,7 @@ scene.add( line );
         renderer.render(scene, camera);
     })
 })();
+
 
 
 
